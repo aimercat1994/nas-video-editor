@@ -1085,114 +1085,7 @@ async fn concat_segments(
     .into_response()
 }
 
-// =========================================================================
-// Handlers — Faststart
-// =========================================================================
 
-async fn faststart_video(
-    State(state): State<AppState>,
-    AxumPath(path): AxumPath<String>,
-) -> Response {
-    let fp = match safe_path(&state.videos_dir, &path) {
-        Ok(p) => p,
-        Err(s) => return (s, "Invalid path").into_response(),
-    };
-
-    if !fp.is_file() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"detail": "Video not found"})),
-        )
-            .into_response();
-    }
-
-    let ext = fp
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    if !["mp4", "m4v", "mov"].contains(&ext.as_str()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"detail": "Only MP4/M4V/MOV files need faststart"})),
-        )
-            .into_response();
-    }
-
-    let task_id = Uuid::new_v4().to_string()[..8].to_string();
-    let tmp_path = fp.parent().unwrap().join(format!(
-        ".{}_faststart_tmp.{}",
-        fp.file_stem().unwrap().to_string_lossy(),
-        ext
-    ));
-
-    let task = Task {
-        id: task_id.clone(),
-        task_type: "faststart".to_string(),
-        source: path,
-        status: "running".to_string(),
-        progress: 0.0,
-        message: "正在优化 MP4 结构...".to_string(),
-        output: None,
-        error: None,
-        created_at: Utc::now().to_rfc3339(),
-    };
-
-    {
-        let mut tasks = state.tasks.write().await;
-        tasks.insert(task_id.clone(), task);
-    }
-
-    let tasks_clone = state.tasks.clone();
-    let tid = task_id.clone();
-    let fp_clone = fp.clone();
-    let tmp_clone = tmp_path.clone();
-
-    tokio::spawn(async move {
-        let result = Command::new("ffmpeg")
-            .args([
-                "-hide_banner",
-                "-y",
-                "-i",
-                fp_clone.to_str().unwrap_or(""),
-                "-c",
-                "copy",
-                "-movflags",
-                "faststart",
-                tmp_clone.to_str().unwrap_or(""),
-            ])
-            .output()
-            .await;
-
-        let mut tasks = tasks_clone.write().await;
-        if let Some(task) = tasks.get_mut(&tid) {
-            match result {
-                Ok(o) if o.status.success() && tmp_clone.is_file() => {
-                    let _ = fs::rename(&tmp_clone, &fp_clone).await;
-                    task.status = "completed".to_string();
-                    task.progress = 1.0;
-                    task.message = format!(
-                        "优化完成: {}",
-                        fp_clone.file_name().unwrap().to_string_lossy()
-                    );
-                }
-                Ok(o) => {
-                    task.status = "failed".to_string();
-                    task.error = Some(String::from_utf8_lossy(&o.stderr).to_string());
-                    task.message = "FFmpeg faststart 失败".to_string();
-                }
-                Err(e) => {
-                    task.status = "failed".to_string();
-                    task.error = Some(e.to_string());
-                    task.message = format!("错误: {}", e);
-                }
-            }
-        }
-        let _ = fs::remove_file(&tmp_clone).await;
-    });
-
-    Json(serde_json::json!({"task_id": task_id})).into_response()
-}
 
 // =========================================================================
 // FFmpeg runner
@@ -1415,7 +1308,7 @@ async fn main() {
         .route("/files", get(list_files))
         .route("/stream/{*path}", get(stream_video))
         .route("/info/{*path}", get(video_info))
-        .route("/faststart/{*path}", post(faststart_video))
+
         .route("/cut", post(cut_video))
         .route("/concat", post(concat_segments))
         .route("/tasks", get(list_tasks))

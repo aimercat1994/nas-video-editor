@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ['timeline', 'timeline-handle', 'timeline-playhead', 'timeline-buffered',
      'timeline-segments', 'handle-in', 'handle-out', 'time-current', 'time-duration',
      'time-display', 'video-placeholder', 'player-wrapper', 'header-title',
-     'video-info', 'btn-faststart', 'icon-play', 'icon-pause', 'icon-vol', 'icon-mute',
+     'video-info', 'icon-play', 'icon-pause', 'icon-vol', 'icon-mute',
      'breadcrumb', 'file-list', 'segments-list', 'segments-empty', 'tasks-list',
      'btn-cut', 'btn-concat', 'sel-codec', 'sel-resolution', 'sel-format',
      'input-extra', 'btn-logout', 'btn-refresh', 'btn-theme', 'btn-play',
@@ -67,8 +67,6 @@ function bindEvents() {
     dom['btn-refresh'].addEventListener('click', () => loadFiles(state._currentPath || ''));
     dom['btn-logout'].addEventListener('click', doLogout);
     dom['btn-theme'].addEventListener('click', toggleTheme);
-    dom['btn-faststart'].addEventListener('click', doFaststart);
-
     video.addEventListener('loadedmetadata', onVideoLoaded);
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('play', () => { state.isPlaying = true; updatePlayBtn(); });
@@ -299,10 +297,6 @@ async function loadVideo(path, name) {
         }
         dom['video-info'].textContent = parts.join(' · ');
     } catch (e) { dom['video-info'].textContent = ''; }
-
-    const ext = path.toLowerCase();
-    dom['btn-faststart'].style.display = (ext.endsWith('.mp4') || ext.endsWith('.m4v') || ext.endsWith('.mov')) ? 'inline-flex' : 'none';
-
     document.querySelectorAll('.file-item').forEach(el => el.classList.remove('active'));
     // Don't reload file list — just update active state
     const items = dom['file-list'].querySelectorAll('.file-item');
@@ -673,19 +667,7 @@ async function doCut() {
     } catch (e) { toast('请求失败: ' + e.message, 'error'); }
 }
 
-async function doFaststart() {
-    if (!state.currentFile) return;
-    try {
-        const res = await fetch(`/api/faststart/${encodeURIComponent(state.currentFile)}`, { method: 'POST' });
-        const data = await res.json();
-        if (res.ok) {
-            toast('正在优化 MP4 启动速度...', 'success');
-            pollTasks();
-        } else {
-            toast(data.detail || '优化失败', 'error');
-        }
-    } catch (e) { toast('请求失败: ' + e.message, 'error'); }
-}
+
 
 async function doConcat() {
     if (!state.currentFile || state.segments.length < 1) return;
