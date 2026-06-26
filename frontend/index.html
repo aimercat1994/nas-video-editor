@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NAS Video Editor</title>
+    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                </div>
+                <div class="brand-text">
+                    <span class="brand-name">Video Editor</span>
+                    <span class="brand-sub">NAS · FFmpeg · GPU</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section file-section">
+                    <span class="nav-section-title">文件</span>
+                    <div class="panel file-browser">
+                        <div id="breadcrumb" class="breadcrumb"></div>
+                        <div id="file-list" class="file-list"></div>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="sidebar-bottom">
+                <div class="nav-section">
+                    <div class="nav-section-title-row">
+                        <span class="nav-section-title">片段队列</span>
+                        <button id="btn-clear-segments" class="btn btn-ghost btn-icon btn-destructive btn-xs" title="清空片段">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        </button>
+                    </div>
+                    <div id="segments-list" class="segments-list"></div>
+                    <div id="segments-empty" class="segments-empty">标记入点/出点后添加片段</div>
+                </div>
+                <div class="nav-section">
+                    <span class="nav-section-title">任务</span>
+                    <div id="tasks-list" class="tasks-list"></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-left">
+                    <h2 id="header-title" class="header-title">选择视频文件开始编辑</h2>
+                    <span id="video-info" class="header-badge"></span>
+                    <button id="btn-faststart" class="btn btn-outline btn-sm" style="display:none" title="优化 MP4 启动速度（moov atom 前置）">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                        优化启动
+                    </button>
+                </div>
+                <div class="header-actions">
+                    <button id="btn-theme" class="btn btn-ghost btn-icon" title="切换主题">
+                        <svg id="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                        <svg id="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                    </button>
+                    <button id="btn-refresh" class="btn btn-ghost btn-icon" title="刷新文件">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+                    </button>
+                    <button id="btn-logout" class="btn btn-ghost btn-icon" title="退出登录">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Video Info Bar -->
+            <div id="video-info-bar" class="video-info-bar" style="display:none">
+                <div class="info-item"><span class="info-label">分辨率</span><span id="info-resolution" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">编码</span><span id="info-codec" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">帧率</span><span id="info-fps" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">码率</span><span id="info-bitrate" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">时长</span><span id="info-duration" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">大小</span><span id="info-size" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">音频</span><span id="info-audio" class="info-value">-</span></div>
+                <div class="info-divider"></div>
+                <div class="info-item"><span class="info-label">格式</span><span id="info-format" class="info-value">-</span></div>
+            </div>
+
+            <!-- Content -->
+            <div class="content">
+                <!-- Video Player Area -->
+                <div class="player-area">
+                    <div id="video-placeholder" class="video-placeholder">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                        <p>从左侧文件列表选择视频</p>
+                    </div>
+
+                    <div id="player-wrapper" class="player-wrapper" style="display:none">
+                        <video id="video-player" preload="auto"></video>
+
+                        <!-- Controls -->
+                        <div class="controls">
+                            <!-- Timeline -->
+                            <div class="timeline-container">
+                                <div id="timeline" class="timeline">
+                                    <div class="timeline-track"></div>
+                                    <div id="timeline-buffered" class="timeline-buffered"></div>
+                                    <div id="timeline-playhead" class="timeline-playhead"></div>
+                                    <div id="timeline-handle" class="timeline-handle"></div>
+                                    <div id="timeline-segments" class="timeline-segments"></div>
+                                    <div id="handle-in" class="handle handle-in" style="display:none"></div>
+                                    <div id="handle-out" class="handle handle-out" style="display:none"></div>
+                                    <div class="timeline-times">
+                                        <span id="time-current" class="mono">00:00:00.000</span>
+                                        <span id="time-display" class="time-display mono"></span>
+                                        <span id="time-duration" class="mono">00:00:00.000</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Buttons -->
+                            <div class="controls-row">
+                                <div class="controls-left">
+                                    <button id="btn-prev-frame" class="btn btn-ghost btn-icon" title="上一帧 (←)">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/></svg>
+                                    </button>
+                                    <button id="btn-play" class="btn btn-ghost btn-icon btn-play" title="播放/暂停 (Space)">
+                                        <svg id="icon-play" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                        <svg id="icon-pause" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                    </button>
+                                    <button id="btn-next-frame" class="btn btn-ghost btn-icon" title="下一帧 (→)">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>
+                                    </button>
+                                    <select id="step-size" class="select-step" title="步进幅度">
+                                        <option value="0.04">1帧</option>
+                                        <option value="0.1">0.1s</option>
+                                        <option value="1" selected>1s</option>
+                                        <option value="5">5s</option>
+                                        <option value="10">10s</option>
+                                    </select>
+                                    <div class="controls-divider"></div>
+                                    <button id="btn-mark-in" class="btn btn-outline btn-sm" title="标记入点 (I)">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 7 6 12 11 17"/><line x1="18" y1="6" x2="18" y2="18"/></svg>
+                                        In
+                                    </button>
+                                    <button id="btn-mark-out" class="btn btn-outline btn-sm" title="标记出点 (O)">
+                                        Out
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 7 18 12 13 17"/><line x1="6" y1="6" x2="6" y2="18"/></svg>
+                                    </button>
+                                    <button id="btn-add-segment" class="btn btn-primary btn-sm" title="添加片段 (A)">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                        添加
+                                    </button>
+                                </div>
+                                <div class="controls-right">
+                                    <button id="btn-volume" class="btn btn-ghost btn-icon" title="静音">
+                                        <svg id="icon-vol" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                                        <svg id="icon-mute" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                                    </button>
+                                    <input id="volume-slider" type="range" min="0" max="1" step="0.05" value="1" class="volume-slider">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Bar -->
+                <div class="settings-bar">
+                    <div class="setting-group">
+                        <label class="setting-label">编码器</label>
+                        <select id="sel-codec" class="select">
+                            <option value="copy" selected>⚡ 快速 (Stream Copy)</option>
+                            <option value="libx264">CPU H.264</option>
+                            <option value="libx265">CPU H.265</option>
+                            <option value="h264_nvenc">🚀 NVIDIA H.264</option>
+                            <option value="hevc_nvenc">🚀 NVIDIA H.265</option>
+                            <option value="h264_qsv">Intel QSV H.264</option>
+                            <option value="hevc_qsv">Intel QSV H.265</option>
+                            <option value="h264_vaapi">AMD VAAPI H.264</option>
+                            <option value="hevc_vaapi">AMD VAAPI H.265</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-label">分辨率</label>
+                        <select id="sel-resolution" class="select">
+                            <option value="" selected>保持原始</option>
+                            <option value="3840x2160">4K (3840×2160)</option>
+                            <option value="1920x1080">1080p</option>
+                            <option value="1280x720">720p</option>
+                            <option value="854x480">480p</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label class="setting-label">格式</label>
+                        <select id="sel-format" class="select">
+                            <option value="" selected>自动</option>
+                            <option value="mp4">MP4</option>
+                            <option value="mkv">MKV</option>
+                            <option value="webm">WebM</option>
+                            <option value="avi">AVI</option>
+                            <option value="mov">MOV</option>
+                        </select>
+                    </div>
+                    <div class="setting-group setting-extra">
+                        <label class="setting-label">额外参数</label>
+                        <input id="input-extra" type="text" placeholder="FFmpeg 参数..." class="input">
+                    </div>
+                    <div class="setting-actions">
+                        <button id="btn-cut" class="btn btn-primary" disabled>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+                            Cut 单段
+                        </button>
+                        <button id="btn-concat" class="btn btn-accent" disabled>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            Concat 拼接
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/js/app.js"></script>
+</body>
+</html>

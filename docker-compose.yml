@@ -1,0 +1,16 @@
+services:
+  video-editor:
+    build: .
+    container_name: video-editor
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    volumes:
+      - /vol1/1000/Alist/备份:/videos/备份
+      - /vol1/1000/Bililive:/videos/Bililive
+      - video-editor-data:/data
+    environment:
+      - PASSWORD=shuzhiyu13
+
+volumes:
+  video-editor-data:
