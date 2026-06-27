@@ -16,13 +16,6 @@ services:
     group_add:
       - "44"    # video group (getent group video)
       - "105"   # render group (getent group render)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, video, compute, utility]
 
 volumes:
   video-editor-data:

@@ -15,7 +15,7 @@
 - ✂️ 标记入点/出点，添加到片段队列，支持单段剪辑和多段拼接
 - ↩️ 撤回系统 — Ctrl+Z 撤销标记/片段操作
 - ⚡ Stream Copy 模式 — 不重编码，秒级完成
-- 🚀 双 GPU 加速 — NVIDIA NVENC + Intel VAAPI 同时可用，启动时自动检测
+- 🚀 GPU 加速 — NVIDIA NVENC / Intel VAAPI，启动时自动检测
 - 📐 转码输出 — 可选分辨率（4K/1080p/720p/480p）、格式（MP4/MKV/WebM/AVI/MOV）
 - 🔧 自定义 FFmpeg 额外参数
 
@@ -78,7 +78,38 @@ volumes:
 
 ## GPU 支持
 
-镜像内置 NVIDIA + Intel 驱动，同时支持独显和核显，启动时自动检测可用编码器。
+镜像内置 NVIDIA + Intel 驱动，启动时自动检测可用编码器。
+
+### Intel VAAPI（核显）
+
+适用于 N100/N305/i3/i5/i7 等带核显的 CPU，NAS 最常见方案。镜像已内置 `intel-media-va-driver`。
+
+```bash
+# 检查设备
+ls /dev/dri/renderD*
+
+# 查看 GID（用于 group_add）
+getent group video   # 通常为 44
+getent group render  # 通常为 105
+```
+
+```yaml
+services:
+  video-editor:
+    image: aimercat1994/nas-video-editor:latest
+    ports:
+      - "8090:8080"
+    volumes:
+      - /path/to/videos:/videos
+      - video-editor-data:/data
+    environment:
+      - PASSWORD=your-password
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"    # video group
+      - "105"   # render group
+```
 
 ### NVIDIA（独显）
 
@@ -118,61 +149,6 @@ services:
               count: all
               capabilities: [gpu]
 ```
-
-### Intel VAAPI（核显）
-
-适用于 N100/N305/i3/i5/i7 等带核显的 CPU，NAS 最常见方案。镜像已内置 `intel-media-va-driver`。
-
-```bash
-# 检查设备
-ls /dev/dri/renderD*
-```
-
-```yaml
-services:
-  video-editor:
-    image: aimercat1994/nas-video-editor:latest
-    ports:
-      - "8090:8080"
-    volumes:
-      - /path/to/videos:/videos
-      - video-editor-data:/data
-    environment:
-      - PASSWORD=your-password
-    devices:
-      - /dev/dri:/dev/dri
-```
-
-### NVIDIA 独显 + Intel 核显（双 GPU）
-
-适用于同时拥有独显和核显的设备（如笔记本、NUC）。镜像会自动检测所有可用编码器。
-
-```yaml
-services:
-  video-editor:
-    image: aimercat1994/nas-video-editor:latest
-    ports:
-      - "8090:8080"
-    volumes:
-      - /path/to/videos:/videos
-      - video-editor-data:/data
-    environment:
-      - PASSWORD=your-password
-    devices:
-      - /dev/dri:/dev/dri
-    group_add:
-      - "44"    # video group
-      - "105"   # render group
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu, video, compute, utility]
-```
-
-> **提示**：`group_add` 中的 GID 可通过 `getent group video` 和 `getent group render` 查看。
 
 ### AMD VAAPI
 
