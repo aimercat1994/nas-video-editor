@@ -380,19 +380,42 @@ function onTimeUpdate() {
 
     dom['time-current'].textContent = fmtTime(video.currentTime);
     _playheadDirty = true;
+    updateMarkerDisplay();
+}
 
-    // Update markers
-    let html = '';
+function updateMarkerDisplay() {
+    const el = dom['time-display'];
+    el.textContent = '';
     if (state.inPoint !== null) {
-        html += `<span class="marker-in">In ${fmtTime(state.inPoint)} <button class="marker-clear" onclick="clearInPoint()" title="清除入点">✕</button></span>`;
+        const span = document.createElement('span');
+        span.className = 'marker-in';
+        span.textContent = 'In ' + fmtTime(state.inPoint) + ' ';
+        const btn = document.createElement('button');
+        btn.className = 'marker-clear';
+        btn.title = '清除入点';
+        btn.textContent = '✕';
+        btn.addEventListener('click', clearInPoint);
+        span.appendChild(btn);
+        el.appendChild(span);
     }
     if (state.outPoint !== null) {
-        html += `<span class="marker-out">Out ${fmtTime(state.outPoint)} <button class="marker-clear" onclick="clearOutPoint()" title="清除出点">✕</button></span>`;
+        const span = document.createElement('span');
+        span.className = 'marker-out';
+        span.textContent = 'Out ' + fmtTime(state.outPoint) + ' ';
+        const btn = document.createElement('button');
+        btn.className = 'marker-clear';
+        btn.title = '清除出点';
+        btn.textContent = '✕';
+        btn.addEventListener('click', clearOutPoint);
+        span.appendChild(btn);
+        el.appendChild(span);
     }
     if (state.inPoint !== null && state.outPoint !== null) {
-        html += `<span style="color:var(--muted-foreground)">(${fmtTime(state.outPoint - state.inPoint)})</span>`;
+        const dur = document.createElement('span');
+        dur.style.color = 'var(--muted-foreground)';
+        dur.textContent = '(' + fmtTime(state.outPoint - state.inPoint) + ')';
+        el.appendChild(dur);
     }
-    dom['time-display'].innerHTML = html;
 }
 
 let _bufferedRaf = null;
@@ -549,7 +572,14 @@ function onTimelineMouseMove(e) {
         _lastSegmentHash = ''; // Force re-render during drag
         updateHandles();
         renderSegmentOverlays();
-        dom['time-current'].textContent = fmtTime(video.currentTime);
+        if (state.dragging === 'in' || state.dragging === 'out') {
+            dom['time-current'].textContent = fmtTime(
+                state.dragging === 'in' ? state.inPoint : state.outPoint
+            );
+            updateMarkerDisplay();
+        } else {
+            dom['time-current'].textContent = fmtTime(video.currentTime);
+        }
     });
 }
 
