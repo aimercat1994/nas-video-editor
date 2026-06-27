@@ -6,17 +6,16 @@ services:
     ports:
       - "8090:8080"
     volumes:
-      - /vol1/1000/Alist:/videos/Alist
-      - /vol1/1000/Bililive:/videos/Bililive
+      - /path/to/your/videos:/videos
       - video-editor-data:/data
     environment:
-      - PASSWORD=shuzhiyu13
+      - PASSWORD=your-password
       - TZ=Asia/Shanghai
     devices:
       - /dev/dri:/dev/dri
     group_add:
-      - "44"    # video group (getent group video)
-      - "105"   # render group (getent group render)
+      - "44"
+      - "105"
 
 volumes:
   video-editor-data:
