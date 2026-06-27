@@ -1126,12 +1126,20 @@ async fn run_ffmpeg(
     let stderr = child.stderr.take().unwrap();
     let mut reader = BufReader::new(stderr);
     let re = Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)").unwrap();
+    let mut last_lines: Vec<String> = Vec::new();
 
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line).await {
             Ok(0) => break,
             Ok(_) => {
+                let trimmed = line.trim().to_string();
+                if !trimmed.is_empty() {
+                    last_lines.push(trimmed);
+                    if last_lines.len() > 20 {
+                        last_lines.remove(0);
+                    }
+                }
                 if let Some(caps) = re.captures(&line) {
                     let h: f64 = caps[1].parse().unwrap_or(0.0);
                     let m: f64 = caps[2].parse().unwrap_or(0.0);
@@ -1173,7 +1181,13 @@ async fn run_ffmpeg(
             }
             _ => {
                 task.status = "failed".to_string();
-                task.message = format!("FFmpeg failed");
+                let detail = last_lines[last_lines.len().saturating_sub(5)..].join("\n");
+                task.error = Some(detail.clone());
+                task.message = if detail.is_empty() {
+                    "FFmpeg failed".to_string()
+                } else {
+                    format!("FFmpeg failed: {}", detail.lines().last().unwrap_or("unknown"))
+                };
             }
         }
     }
