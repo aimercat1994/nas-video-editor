@@ -59,14 +59,33 @@ document.addEventListener('DOMContentLoaded', () => {
      'input-extra', 'btn-logout', 'btn-refresh', 'btn-theme', 'btn-play',
      'btn-prev-frame', 'btn-next-frame', 'btn-mark-in', 'btn-mark-out',
      'btn-add-segment', 'btn-clear-segments', 'btn-volume', 'volume-slider',
-     'step-size', 'icon-sun', 'icon-moon'].forEach($);
+     'step-size', 'btn-undo', 'icon-sun', 'icon-moon'].forEach($);
 
     initTheme();
     bindEvents();
-    // Delay initial file load to let auth cookie settle after login redirect
-    setTimeout(() => loadFiles(''), 100);
-    pollTasks();
-    detectGPU();
+    // Verify auth cookie is valid before loading files
+    // Retry auth check up to 3 times with increasing delay (cookie may need time to settle)
+    async function initLoad(retries) {
+        try {
+            const r = await fetch('/api/auth/check');
+            if (r.ok) {
+                _authConfirmed = true;
+                loadFiles('');
+                pollTasks();
+                detectGPU();
+                return;
+            }
+        } catch (e) {}
+        if (retries > 0) {
+            setTimeout(() => initLoad(retries - 1), 300);
+        } else {
+            // Final attempt — try loading anyway, loadFiles has its own retry
+            loadFiles('');
+            pollTasks();
+            detectGPU();
+        }
+    }
+    initLoad(3);
 });
 
 function bindEvents() {
@@ -132,6 +151,13 @@ async function loadFiles(path, _retry) {
     state._currentPath = path;
     try {
         const res = await fetch(`/api/files?path=${encodeURIComponent(path)}`, { signal: _browseAbort.signal });
+        if (!res.ok) {
+            if (res.status === 401 && !_retry) {
+                // Cookie may not be ready yet — retry after delay
+                setTimeout(() => loadFiles(path, true), 500);
+            }
+            return;
+        }
         const data = await res.json();
         renderBreadcrumb(data.current, data.parent);
         renderFileList(data.dirs, data.files, data.current);
