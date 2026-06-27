@@ -348,8 +348,17 @@ function updateVolumeBtn() {
 // =========================================================================
 // Time Update — rAF-throttled
 // =========================================================================
-let _timeUpdateRaf = null;
 let _lastTimeUpdate = 0;
+let _playheadDirty = false;
+
+// Playhead animation loop — always runs, skips when not dirty
+(function playheadLoop() {
+    requestAnimationFrame(playheadLoop);
+    if (_playheadDirty || state.dragging) {
+        _playheadDirty = false;
+        updatePlayhead();
+    }
+})();
 
 function onTimeUpdate() {
     // Throttle to ~15fps for UI updates (markers, time text)
@@ -358,7 +367,7 @@ function onTimeUpdate() {
     _lastTimeUpdate = now;
 
     dom['time-current'].textContent = fmtTime(video.currentTime);
-    updatePlayhead();
+    _playheadDirty = true;
 
     // Update markers
     let html = '';
@@ -408,10 +417,9 @@ function updatePlayhead() {
     if (!state.duration) return;
     const pct = (video.currentTime / state.duration) * 100;
     dom['timeline-playhead'].style.width = pct + '%';
-    // Use transform for GPU-accelerated positioning
+    // Use left + translateX(-50%) to center the handle on the playhead edge
     const handle = dom['timeline-handle'];
-    handle.style.transform = `translateX(${pct}%)`;
-    handle.style.left = '0';
+    handle.style.left = pct + '%';
     handle.style.display = state.duration ? 'flex' : 'none';
 }
 
@@ -528,7 +536,6 @@ function onTimelineMouseMove(e) {
         updateHandles();
         renderSegmentOverlays();
         dom['time-current'].textContent = fmtTime(video.currentTime);
-        updatePlayhead();
     });
 }
 
