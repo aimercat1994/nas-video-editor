@@ -12,9 +12,7 @@ RUN cargo build --release
 # Runtime stage
 FROM debian:trixie-slim
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+RUN echo 'deb http://deb.debian.org/debian trixie non-free-firmware' >> /etc/apt/sources.list.d/non-free.list &&     apt-get update &&     apt-get install -y --no-install-recommends       ffmpeg       intel-media-va-driver       i965-va-driver       libva-drm2       libva2       vainfo &&     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/target/release/nas-video-editor /app/nas-video-editor

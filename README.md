@@ -13,8 +13,9 @@
 
 **剪辑**
 - ✂️ 标记入点/出点，添加到片段队列，支持单段剪辑和多段拼接
+- ↩️ 撤回系统 — Ctrl+Z 撤销标记/片段操作
 - ⚡ Stream Copy 模式 — 不重编码，秒级完成
-- 🚀 GPU 加速 — NVIDIA NVENC / Intel QSV / AMD VAAPI，启动时自动检测
+- 🚀 双 GPU 加速 — NVIDIA NVENC + Intel VAAPI 同时可用，启动时自动检测
 - 📐 转码输出 — 可选分辨率（4K/1080p/720p/480p）、格式（MP4/MKV/WebM/AVI/MOV）
 - 🔧 自定义 FFmpeg 额外参数
 
@@ -77,6 +78,8 @@ volumes:
 
 ## GPU 支持
 
+镜像内置 NVIDIA + Intel 驱动，同时支持独显和核显，启动时自动检测可用编码器。
+
 ### NVIDIA（独显）
 
 适用于 RTX 3060/4060、GTX 1650 等。需要宿主机安装 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)。
@@ -116,13 +119,13 @@ services:
               capabilities: [gpu]
 ```
 
-### Intel QSV（核显）
+### Intel VAAPI（核显）
 
-适用于 N100/N305/i3/i5/i7 等带核显的 CPU，NAS 最常见方案。
+适用于 N100/N305/i3/i5/i7 等带核显的 CPU，NAS 最常见方案。镜像已内置 `intel-media-va-driver`。
 
 ```bash
 # 检查设备
-ls /dev/dri/renderD128
+ls /dev/dri/renderD*
 ```
 
 ```yaml
@@ -140,34 +143,54 @@ services:
       - /dev/dri:/dev/dri
 ```
 
+### NVIDIA 独显 + Intel 核显（双 GPU）
+
+适用于同时拥有独显和核显的设备（如笔记本、NUC）。镜像会自动检测所有可用编码器。
+
+```yaml
+services:
+  video-editor:
+    image: aimercat1994/nas-video-editor:latest
+    ports:
+      - "8090:8080"
+    volumes:
+      - /path/to/videos:/videos
+      - video-editor-data:/data
+    environment:
+      - PASSWORD=your-password
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"    # video group
+      - "105"   # render group
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, compute, utility]
+```
+
+> **提示**：`group_add` 中的 GID 可通过 `getent group video` 和 `getent group render` 查看。
+
 ### AMD VAAPI
 
-适用于 AMD GPU 或 APU，配置同 Intel QSV。
+适用于 AMD GPU 或 APU，配置同 Intel VAAPI。
 
 ## 编码器对比
 
-| 编码器 | 类型 | 速度 | 质量 | 适用场景 |
+| 编码器 | 设备 | 类型 | 速度 | 适用场景 |
 |--------|------|------|------|----------|
-| `copy` | 不重编码 | ⚡ 秒级 | 原始 | 快速裁剪（默认） |
-| `libx264` | CPU | 🐢 慢 | 高 | 精准剪辑、无 GPU |
-| `libx265` | CPU | 🐢 很慢 | 最高 | 高压缩比 |
-| `h264_nvenc` | NVIDIA | 🚀 快 | 良好 | 快速精准剪辑 |
-| `hevc_nvenc` | NVIDIA | 🚀 快 | 良好 | 高压缩 + 快速 |
-| `h264_qsv` | Intel | 🚀 快 | 良好 | NAS 常用 |
-| `hevc_qsv` | Intel | 🚀 快 | 良好 | NAS 高压缩 |
-| `h264_vaapi` | AMD | 🚀 较快 | 良好 | AMD 设备 |
-| `hevc_vaapi` | AMD | 🚀 较快 | 良好 | AMD 高压缩 |
+| `copy` | — | 不重编码 | ⚡ 秒级 | 快速裁剪（默认） |
+| `libx264` | CPU | 软编码 | 🐢 慢 | 精准剪辑、无 GPU |
+| `libx265` | CPU | 软编码 | 🐢 很慢 | 高压缩比 |
+| `h264_nvenc` | NVIDIA | 硬编码 | 🚀 快 | 快速精准剪辑 |
+| `hevc_nvenc` | NVIDIA | 硬编码 | 🚀 快 | 高压缩 + 快速 |
+| `h264_vaapi` | Intel/AMD | 硬编码 | 🚀 较快 | 低功耗设备首选 |
+| `hevc_vaapi` | Intel/AMD | 硬编码 | 🚀 较快 | 低功耗高压缩 |
 
 > **Stream Copy vs 转码**：`copy` 模式不重新编码视频，速度极快但无法改变分辨率/格式。需要精准到帧或改变参数时选择对应编码器。
-
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `8080` | 容器内监听端口 |
-| `VIDEOS_DIR` | `/videos` | 视频目录挂载点 |
-| `PASSWORD` | （空） | 登录密码，留空则无需认证 |
-| `TZ` | `UTC` | 时区 |
 
 ## 快捷键
 
@@ -179,12 +202,22 @@ services:
 | `I` | 标记入点 |
 | `O` | 标记出点 |
 | `A` | 添加片段到队列 |
+| `Ctrl+Z` | 撤销操作 |
 
 ## 输出文件
 
 输出保存在源文件同目录：
 - 单段剪辑：`原文件名_CLIP_YYYYMMDD_HHMMSS.mp4`
 - 多段拼接：`原文件名_CONCAT_YYYYMMDD_HHMMSS.mp4`
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `PORT` | `8080` | 容器内监听端口 |
+| `VIDEOS_DIR` | `/videos` | 视频目录挂载点 |
+| `PASSWORD` | （空） | 登录密码，留空则无需认证 |
+| `TZ` | `UTC` | 时区 |
 
 ## API
 

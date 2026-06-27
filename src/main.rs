@@ -398,47 +398,47 @@ async fn detect_gpu() -> Json<serde_json::Value> {
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
-    let gpu_encoders = [
-        "h264_nvenc",
-        "hevc_nvenc",
-        "h264_qsv",
-        "hevc_qsv",
-        "h264_vaapi",
-        "hevc_vaapi",
-    ];
-
-    let fut_list: Vec<_> = gpu_encoders
-        .iter()
-        .map(|enc| async move {
-            let ok = Command::new("ffmpeg")
-                .args([
-                    "-hide_banner",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=black:s=256x256:d=0.1",
-                    "-c:v",
-                    enc,
-                    "-f",
-                    "null",
-                    "-",
-                ])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if ok { Some(enc.to_string()) } else { None }
-        })
-        .collect();
-    let results = futures::future::join_all(fut_list).await;
-    for enc in results.into_iter().flatten() {
-        available.push(enc);
+    // NVENC — no special device init
+    for enc in &["h264_nvenc", "hevc_nvenc"] {
+        let ok = Command::new("ffmpeg")
+            .args(["-hide_banner", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1", "-c:v", *enc, "-f", "null", "-"])
+            .stdout(Stdio::null()).stderr(Stdio::null())
+            .status().await.map(|s| s.success()).unwrap_or(false);
+        if ok { available.push(enc.to_string()); }
     }
 
-    let recommended = if available.len() > 3 {
-        available.last().unwrap().clone()
+    // VAAPI — need device init + hwupload
+    for enc in &["h264_vaapi", "hevc_vaapi"] {
+        for dev in &["renderD128", "renderD129"] {
+            let ok = Command::new("ffmpeg")
+                .args(["-hide_banner", "-init_hw_device", &format!("vaapi=hw:/dev/dri/{}", dev),
+                       "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                       "-vf", "format=nv12,hwupload", "-c:v", *enc, "-f", "null", "-"])
+                .stdout(Stdio::null()).stderr(Stdio::null())
+                .status().await.map(|s| s.success()).unwrap_or(false);
+            if ok { available.push(enc.to_string()); break; }
+        }
+    }
+
+    // QSV — need device init
+    for enc in &["h264_qsv", "hevc_qsv"] {
+        for dev in &["renderD128", "renderD129"] {
+            let ok = Command::new("ffmpeg")
+                .args(["-hide_banner", "-init_hw_device", &format!("qsv=hw:/dev/dri/{}", dev),
+                       "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                       "-c:v", *enc, "-f", "null", "-"])
+                .stdout(Stdio::null()).stderr(Stdio::null())
+                .status().await.map(|s| s.success()).unwrap_or(false);
+            if ok { available.push(enc.to_string()); break; }
+        }
+    }
+
+    let recommended = if available.iter().any(|e| e == "hevc_nvenc") {
+        "hevc_nvenc".to_string()
+    } else if available.iter().any(|e| e == "h264_nvenc") {
+        "h264_nvenc".to_string()
+    } else if available.iter().any(|e| e == "h264_vaapi") {
+        "h264_vaapi".to_string()
     } else {
         "copy".to_string()
     };
