@@ -5,11 +5,16 @@
 
 // =========================================================================
 // Global Auth: intercept 401 → redirect to login
+// Only redirect after a successful auth has been confirmed in this session
 // =========================================================================
 const _origFetch = window.fetch;
+let _authConfirmed = false;
 window.fetch = async (...args) => {
     const res = await _origFetch(...args);
-    if (res.status === 401 && !window.location.pathname.includes('login')) {
+    if (res.ok && args[0] && typeof args[0] === 'string' && args[0].includes('/api/')) {
+        _authConfirmed = true;
+    }
+    if (res.status === 401 && _authConfirmed && !window.location.pathname.includes('login')) {
         window.location.href = '/login.html';
         throw new Error('Unauthorized');
     }
@@ -43,7 +48,7 @@ const video = $('video-player');
 // =========================================================================
 // Init
 // =========================================================================
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
     // Pre-cache frequently accessed elements
     ['timeline', 'timeline-handle', 'timeline-playhead', 'timeline-buffered',
      'timeline-segments', 'handle-in', 'handle-out', 'time-current', 'time-duration',
@@ -58,19 +63,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     initTheme();
     bindEvents();
-
-    // Check auth first, then load files
-    try {
-        const authRes = await fetch('/api/auth/check');
-        if (authRes.ok) {
-            loadFiles('');
-            pollTasks();
-            detectGPU();
-        }
-        // If 401, the global interceptor will redirect to login
-    } catch (e) {
-        console.warn('Auth check failed:', e);
-    }
+    // Delay initial file load to let auth cookie settle after login redirect
+    setTimeout(() => loadFiles(''), 100);
+    pollTasks();
+    detectGPU();
 });
 
 function bindEvents() {
@@ -130,7 +126,7 @@ async function detectGPU() {
 // =========================================================================
 let _browseAbort = null;
 
-async function loadFiles(path) {
+async function loadFiles(path, _retry) {
     if (_browseAbort) _browseAbort.abort();
     _browseAbort = new AbortController();
     state._currentPath = path;
@@ -140,7 +136,13 @@ async function loadFiles(path) {
         renderBreadcrumb(data.current, data.parent);
         renderFileList(data.dirs, data.files, data.current);
     } catch (e) {
-        if (e.name !== 'AbortError') console.error('Load files failed:', e);
+        if (e.name === 'AbortError') return;
+        // Retry once after 500ms (cookie may not be ready on page load)
+        if (!_retry) {
+            setTimeout(() => loadFiles(path, true), 500);
+        } else {
+            console.error('Load files failed:', e);
+        }
     }
 }
 
