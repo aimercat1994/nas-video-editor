@@ -177,7 +177,7 @@ fn make_output_path(source: &Path, suffix: &str, ext: Option<&str>) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let parent = source.parent().unwrap_or(Path::new("."));
-    parent.join(format!("{}_{}_{}{}", stem, suffix, ts, out_ext))
+    parent.join(format!("{}_{}_{}.{}", stem, suffix, ts, out_ext))
 }
 
 fn sanitize_extra_args(args: &str) -> Vec<String> {
