@@ -1,16 +1,16 @@
 services:
   video-editor:
-    build: .
+    image: aimercat1994/nas-video-editor:latest
     container_name: video-editor
     restart: unless-stopped
     ports:
       - "8090:8080"
     volumes:
-      - /vol1/1000/Alist/备份:/videos/备份
-      - /vol1/1000/Bililive:/videos/Bililive
+      - /path/to/your/videos:/videos
       - video-editor-data:/data
     environment:
-      - PASSWORD=shuzhiyu13
+      - PASSWORD=your-password
+      - TZ=Asia/Shanghai
 
 volumes:
   video-editor-data:
