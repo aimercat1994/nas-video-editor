@@ -93,6 +93,8 @@ function bindEvents() {
     document.addEventListener('mousemove', onTimelineMouseMove);
     document.addEventListener('mouseup', onTimelineMouseUp);
     document.addEventListener('keydown', onKeyDown);
+
+    dom['btn-undo'].addEventListener('click', undo);
 }
 
 // =========================================================================
@@ -201,20 +203,8 @@ function renderFileList(dirs, files, currentPath) {
 function makeFileItem(type, name, meta, onClick) {
     const div = document.createElement('div');
     div.className = 'file-item';
-    const iconSpan = document.createElement('span');
-    iconSpan.innerHTML = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
-    div.appendChild(iconSpan);
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'name';
-    nameSpan.title = name;
-    nameSpan.textContent = name;
-    div.appendChild(nameSpan);
-    if (meta) {
-        const metaSpan = document.createElement('span');
-        metaSpan.className = 'meta';
-        metaSpan.textContent = meta;
-        div.appendChild(metaSpan);
-    }
+    const iconSvg = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
+    div.innerHTML = `${iconSvg}<span class="name" title="${name}">${name}</span>${meta ? `<span class="meta">${meta}</span>` : ''}`;
     div.addEventListener('click', onClick);
     return div;
 }
@@ -238,7 +228,7 @@ async function loadVideo(path, name) {
     dom['player-wrapper'].style.display = 'flex';
     dom['header-title'].textContent = name;
 
-    const streamUrl = `/api/stream/${encodeURIComponent(path)}`;
+    const streamUrl = `/api/videos/${encodeURIComponent(path)}/stream`;
     const isTs = path.toLowerCase().endsWith('.ts');
 
     if (isTs && mpegts.isSupported()) {
@@ -268,7 +258,7 @@ async function loadVideo(path, name) {
     }
 
     try {
-        const res = await fetch(`/api/info/${encodeURIComponent(path)}`);
+        const res = await fetch(`/api/videos/${encodeURIComponent(path)}/info`);
         state.videoInfo = await res.json();
         const v = state.videoInfo;
         const parts = [];
@@ -325,6 +315,8 @@ function onVideoLoaded() {
     dom['time-current'].textContent = fmtTime(0);
     // Invalidate cached timeline rect
     _timelineRect = null;
+    _markerHash = '';
+    _lastSegmentHash = '';
     updateTimeline();
     updateHandles();
 }
@@ -360,17 +352,8 @@ function updateVolumeBtn() {
 // =========================================================================
 // Time Update — rAF-throttled
 // =========================================================================
+let _timeUpdateRaf = null;
 let _lastTimeUpdate = 0;
-let _playheadDirty = false;
-
-// Playhead animation loop — always runs, skips when not dirty
-(function playheadLoop() {
-    requestAnimationFrame(playheadLoop);
-    if (_playheadDirty || state.dragging) {
-        _playheadDirty = false;
-        updatePlayhead();
-    }
-})();
 
 function onTimeUpdate() {
     // Throttle to ~15fps for UI updates (markers, time text)
@@ -379,43 +362,26 @@ function onTimeUpdate() {
     _lastTimeUpdate = now;
 
     dom['time-current'].textContent = fmtTime(video.currentTime);
-    _playheadDirty = true;
-    updateMarkerDisplay();
+    updatePlayhead();
+
+    // Update markers (only when state changes)
+    renderMarkers();
 }
 
-function updateMarkerDisplay() {
+let _markerHash = '';
+function renderMarkers() {
+    const hash = `${state.inPoint}|${state.outPoint}`;
+    if (hash === _markerHash) return;
+    _markerHash = hash;
+
     const el = dom['time-display'];
     el.textContent = '';
-    if (state.inPoint !== null) {
-        const span = document.createElement('span');
-        span.className = 'marker-in';
-        span.textContent = 'In ' + fmtTime(state.inPoint) + ' ';
-        const btn = document.createElement('button');
-        btn.className = 'marker-clear';
-        btn.title = '清除入点';
-        btn.textContent = '✕';
-        btn.addEventListener('click', clearInPoint);
-        span.appendChild(btn);
-        el.appendChild(span);
-    }
-    if (state.outPoint !== null) {
-        const span = document.createElement('span');
-        span.className = 'marker-out';
-        span.textContent = 'Out ' + fmtTime(state.outPoint) + ' ';
-        const btn = document.createElement('button');
-        btn.className = 'marker-clear';
-        btn.title = '清除出点';
-        btn.textContent = '✕';
-        btn.addEventListener('click', clearOutPoint);
-        span.appendChild(btn);
-        el.appendChild(span);
-    }
-    if (state.inPoint !== null && state.outPoint !== null) {
-        const dur = document.createElement('span');
-        dur.style.color = 'var(--muted-foreground)';
-        dur.textContent = '(' + fmtTime(state.outPoint - state.inPoint) + ')';
-        el.appendChild(dur);
-    }
+
+    const parts = [];
+    if (state.inPoint !== null) parts.push(`In ${fmtTime(state.inPoint)}`);
+    if (state.outPoint !== null) parts.push(`Out ${fmtTime(state.outPoint)}`);
+    if (state.inPoint !== null && state.outPoint !== null) parts.push(`(${fmtTime(state.outPoint - state.inPoint)})`);
+    el.textContent = parts.join(' ');
 }
 
 let _bufferedRaf = null;
@@ -423,12 +389,10 @@ function scheduleBufferedUpdate() {
     if (_bufferedRaf) return;
     _bufferedRaf = requestAnimationFrame(() => {
         _bufferedRaf = null;
-        try {
-            if (video.buffered.length > 0) {
-                const end = video.buffered.end(video.buffered.length - 1);
-                dom['timeline-buffered'].style.width = (end / state.duration * 100) + '%';
-            }
-        } catch (e) { /* buffered range changed */ }
+        if (video.buffered.length > 0) {
+            const end = video.buffered.end(video.buffered.length - 1);
+            dom['timeline-buffered'].style.width = (end / state.duration * 100) + '%';
+        }
     });
 }
 
@@ -454,9 +418,10 @@ function updatePlayhead() {
     if (!state.duration) return;
     const pct = (video.currentTime / state.duration) * 100;
     dom['timeline-playhead'].style.width = pct + '%';
-    // Use left + translateX(-50%) to center the handle on the playhead edge
+    // Use transform for GPU-accelerated positioning
     const handle = dom['timeline-handle'];
-    handle.style.left = pct + '%';
+    handle.style.transform = `translateX(${pct}%)`;
+    handle.style.left = '0';
     handle.style.display = state.duration ? 'flex' : 'none';
 }
 
@@ -572,14 +537,8 @@ function onTimelineMouseMove(e) {
         _lastSegmentHash = ''; // Force re-render during drag
         updateHandles();
         renderSegmentOverlays();
-        if (state.dragging === 'in' || state.dragging === 'out') {
-            dom['time-current'].textContent = fmtTime(
-                state.dragging === 'in' ? state.inPoint : state.outPoint
-            );
-            updateMarkerDisplay();
-        } else {
-            dom['time-current'].textContent = fmtTime(video.currentTime);
-        }
+        dom['time-current'].textContent = fmtTime(video.currentTime);
+        updatePlayhead();
     });
 }
 
@@ -593,6 +552,7 @@ function onTimelineMouseUp() {
 // =========================================================================
 function markIn() {
     if (!state.duration) return;
+    pushHistory({ type: 'setIn', prev: state.inPoint });
     state.inPoint = video.currentTime;
     if (state.outPoint !== null && state.outPoint <= state.inPoint) state.outPoint = null;
     _lastSegmentHash = '';
@@ -602,6 +562,7 @@ function markIn() {
 
 function markOut() {
     if (!state.duration) return;
+    pushHistory({ type: 'setOut', prev: state.outPoint });
     state.outPoint = video.currentTime;
     if (state.inPoint !== null && state.inPoint >= state.outPoint) state.inPoint = null;
     _lastSegmentHash = '';
@@ -609,18 +570,50 @@ function markOut() {
     toast(`Out: ${fmtTime(state.outPoint)}`, 'success');
 }
 
-function clearInPoint() {
-    state.inPoint = null;
-    _lastSegmentHash = '';
-    updateHandles(); renderSegmentOverlays(); onTimeUpdate();
-    toast('入点已清除', 'success');
+// =========================================================================
+// Undo System
+// =========================================================================
+const _history = [];
+
+function pushHistory(action) {
+    _history.push(action);
+    if (_history.length > 50) _history.shift();
+    updateUndoBtn();
 }
 
-function clearOutPoint() {
-    state.outPoint = null;
+function updateUndoBtn() {
+    const btn = dom['btn-undo'];
+    if (btn) btn.style.display = _history.length ? '' : 'none';
+}
+
+function undo() {
+    if (!_history.length) return;
+    const action = _history.pop();
+
+    switch (action.type) {
+        case 'setIn':
+            state.inPoint = action.prev;
+            toast(action.prev !== null ? `撤回 In: ${fmtTime(action.prev)}` : '撤回入点', 'success');
+            break;
+        case 'setOut':
+            state.outPoint = action.prev;
+            toast(action.prev !== null ? `撤回 Out: ${fmtTime(action.prev)}` : '撤回出点', 'success');
+            break;
+        case 'addSegment':
+            state.segments.pop();
+            state.inPoint = action.inPoint;
+            state.outPoint = action.outPoint;
+            toast('撤回添加片段', 'success');
+            break;
+        case 'removeSegment':
+            state.segments.splice(action.index, 0, action.segment);
+            toast('撤回删除片段', 'success');
+            break;
+    }
     _lastSegmentHash = '';
-    updateHandles(); renderSegmentOverlays(); onTimeUpdate();
-    toast('出点已清除', 'success');
+    _markerHash = '';
+    updateHandles(); renderSegmentOverlays(); updateSegmentsUI(); onTimeUpdate();
+    updateUndoBtn();
 }
 
 // =========================================================================
@@ -630,6 +623,7 @@ function addSegment() {
     if (state.inPoint === null || state.outPoint === null) {
         toast('请先标记 In 和 Out 点', 'error'); return;
     }
+    pushHistory({ type: 'addSegment', inPoint: state.inPoint, outPoint: state.outPoint });
     state.segments.push({ start: state.inPoint, end: state.outPoint });
     state.inPoint = null;
     state.outPoint = null;
@@ -639,6 +633,7 @@ function addSegment() {
 }
 
 function removeSegment(i) {
+    pushHistory({ type: 'removeSegment', index: i, segment: { ...state.segments[i] } });
     state.segments.splice(i, 1);
     _lastSegmentHash = '';
     updateSegmentsUI(); renderSegmentOverlays();
@@ -787,61 +782,22 @@ function renderTasks() {
     for (const t of state.tasks) {
         const div = document.createElement('div');
         div.className = 'task-item';
-
-        // Header
-        const header = document.createElement('div');
-        header.className = 'task-header';
-        const typeSpan = document.createElement('span');
-        typeSpan.className = 'task-type';
-        typeSpan.innerHTML = (t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT) + ' ';
-        const typeLabel = document.createTextNode((t.type === 'cut' ? 'Cut' : 'Concat') + ' #' + t.id);
-        typeSpan.appendChild(typeLabel);
-        header.appendChild(typeSpan);
-        const statusSpan = document.createElement('span');
-        statusSpan.className = 'task-status ' + t.status;
-        statusSpan.textContent = statusLabel(t.status);
-        header.appendChild(statusSpan);
-        div.appendChild(header);
-
-        // Message
-        const msgDiv = document.createElement('div');
-        msgDiv.className = 'task-msg';
-        msgDiv.textContent = t.message || '';
-        div.appendChild(msgDiv);
-
-        // Progress bar
-        if (t.status === 'running' || t.status === 'queued') {
-            const bar = document.createElement('div');
-            bar.className = 'task-progress-bar';
-            const fill = document.createElement('div');
-            fill.className = 'task-progress-fill';
-            fill.style.width = (t.progress * 100) + '%';
-            bar.appendChild(fill);
-            div.appendChild(bar);
-            const actions = document.createElement('div');
-            actions.className = 'task-actions';
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-ghost btn-sm btn-destructive';
-            btn.textContent = '取消';
-            btn.addEventListener('click', async () => {
-                await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
-                pollTasks();
-            });
-            actions.appendChild(btn);
-            div.appendChild(actions);
-        }
-
-        // Output
-        if (t.status === 'completed' && t.output) {
-            const actions = document.createElement('div');
-            actions.className = 'task-actions';
-            const outSpan = document.createElement('span');
-            outSpan.className = 'task-output';
-            outSpan.textContent = '📁 ' + t.output;
-            actions.appendChild(outSpan);
-            div.appendChild(actions);
-        }
-
+        const icon = t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT;
+        div.innerHTML = `
+            <div class="task-header">
+                <span class="task-type">${icon} ${t.type === 'cut' ? 'Cut' : 'Concat'} #${t.id}</span>
+                <span class="task-status ${t.status}">${statusLabel(t.status)}</span>
+            </div>
+            <div class="task-msg">${t.message || ''}</div>
+            ${t.status === 'running' || t.status === 'queued' ? `<div class="task-progress-bar"><div class="task-progress-fill" style="width:${t.progress * 100}%"></div></div>` : ''}
+            ${(t.status === 'running' || t.status === 'queued') ? `<div class="task-actions"><button class="btn btn-ghost btn-sm btn-destructive" data-task="${t.id}">取消</button></div>` : ''}
+            ${t.status === 'completed' && t.output ? `<div class="task-actions"><span class="task-output">📁 ${t.output}</span></div>` : ''}
+        `;
+        const cancelBtn = div.querySelector('[data-task]');
+        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
+            await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
+            pollTasks();
+        });
         frag.appendChild(div);
     }
     list.textContent = '';
@@ -864,6 +820,9 @@ function onKeyDown(e) {
         case 'i': case 'I': e.preventDefault(); markIn(); break;
         case 'o': case 'O': e.preventDefault(); markOut(); break;
         case 'a': case 'A': e.preventDefault(); addSegment(); break;
+        case 'z': case 'Z':
+            if (e.ctrlKey || e.metaKey) { e.preventDefault(); undo(); }
+            break;
     }
 }
 
@@ -871,7 +830,7 @@ function onKeyDown(e) {
 // Utilities
 // =========================================================================
 function fmtTime(s) {
-    if (s == null || isNaN(s)) return '00:00:00.000';
+    if (!s || isNaN(s)) return '00:00:00.000';
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
