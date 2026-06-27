@@ -26,7 +26,7 @@ use tokio::{
     sync::RwLock,
 };
 use tower_http::services::ServeDir;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -233,16 +233,29 @@ fn validate_resolution(resolution: &str) -> Result<(u32, u32), StatusCode> {
 
 fn encoder_extra_args(codec: &str, resolution: Option<&str>) -> Vec<String> {
     let mut args = Vec::new();
+    let is_vaapi = codec.contains("vaapi");
+    let is_qsv = codec.contains("qsv");
+    let is_hw = is_vaapi || is_qsv;
+
     if let Some(res) = resolution {
         if let Ok((w, h)) = validate_resolution(res) {
-            args.push("-vf".to_string());
-            args.push(format!(
+            let scale = format!(
                 "scale={}:{}:force_original_aspect_ratio=decrease,pad={}:{}:(ow-iw)/2:(oh-ih)/2",
                 w, h, w, h
-            ));
+            );
+            if is_vaapi {
+                args.extend(["-vf".into(), format!("format=nv12,{},hwupload", scale)]);
+            } else if is_qsv {
+                args.extend(["-vf".into(), format!("format=nv12,{}", scale)]);
+            } else {
+                args.extend(["-vf".into(), scale]);
+            }
         }
+    } else if is_vaapi {
+        args.extend(["-vf".into(), "format=nv12,hwupload".into()]);
+    } else if is_qsv {
+        args.extend(["-vf".into(), "format=nv12".into()]);
     }
-    let _ = codec; // codec used by caller
     args
 }
 
@@ -398,39 +411,73 @@ async fn detect_gpu() -> Json<serde_json::Value> {
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
 
-    // NVENC — no special device init
-    for enc in &["h264_nvenc", "hevc_nvenc"] {
-        let ok = Command::new("ffmpeg")
-            .args(["-hide_banner", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1", "-c:v", *enc, "-f", "null", "-"])
-            .stdout(Stdio::null()).stderr(Stdio::null())
-            .status().await.map(|s| s.success()).unwrap_or(false);
-        if ok { available.push(enc.to_string()); }
-    }
+    // Discover render devices dynamically
+    let render_devs: Vec<String> = match fs::read_dir("/dev/dri").await {
+        Ok(mut entries) => {
+            let mut devs = Vec::new();
+            while let Ok(Some(e)) = entries.next_entry().await {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with("renderD") {
+                    devs.push(name);
+                }
+            }
+            devs.sort();
+            devs
+        }
+        Err(_) => vec![],
+    };
 
-    // VAAPI — need device init + hwupload
-    for enc in &["h264_vaapi", "hevc_vaapi"] {
-        for dev in &["renderD128", "renderD129"] {
+    type Fut = std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+    let mut all_futs: Vec<Fut> = Vec::new();
+
+    for enc in ["h264_nvenc", "hevc_nvenc"] {
+        let enc = enc.to_string();
+        all_futs.push(Box::pin(async move {
             let ok = Command::new("ffmpeg")
-                .args(["-hide_banner", "-init_hw_device", &format!("vaapi=hw:/dev/dri/{}", dev),
-                       "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
-                       "-vf", "format=nv12,hwupload", "-c:v", *enc, "-f", "null", "-"])
+                .args(["-hide_banner", "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1", "-c:v", &enc, "-f", "null", "-"])
                 .stdout(Stdio::null()).stderr(Stdio::null())
                 .status().await.map(|s| s.success()).unwrap_or(false);
-            if ok { available.push(enc.to_string()); break; }
-        }
+            if ok { Some(enc) } else { None }
+        }));
     }
 
-    // QSV — need device init
-    for enc in &["h264_qsv", "hevc_qsv"] {
-        for dev in &["renderD128", "renderD129"] {
-            let ok = Command::new("ffmpeg")
-                .args(["-hide_banner", "-init_hw_device", &format!("qsv=hw:/dev/dri/{}", dev),
-                       "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
-                       "-c:v", *enc, "-f", "null", "-"])
-                .stdout(Stdio::null()).stderr(Stdio::null())
-                .status().await.map(|s| s.success()).unwrap_or(false);
-            if ok { available.push(enc.to_string()); break; }
-        }
+    for enc in ["h264_vaapi", "hevc_vaapi"] {
+        let enc = enc.to_string();
+        let devs = render_devs.clone();
+        all_futs.push(Box::pin(async move {
+            for dev in &devs {
+                let ok = Command::new("ffmpeg")
+                    .args(["-hide_banner", "-init_hw_device", &format!("vaapi=hw:/dev/dri/{}", dev),
+                           "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                           "-vf", "format=nv12,hwupload", "-c:v", &enc, "-f", "null", "-"])
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status().await.map(|s| s.success()).unwrap_or(false);
+                if ok { return Some(enc); }
+            }
+            None
+        }));
+    }
+
+    for enc in ["h264_qsv", "hevc_qsv"] {
+        let enc = enc.to_string();
+        let devs = render_devs.clone();
+        all_futs.push(Box::pin(async move {
+            for dev in &devs {
+                let ok = Command::new("ffmpeg")
+                    .args(["-hide_banner", "-init_hw_device", &format!("qsv=hw:/dev/dri/{}", dev),
+                           "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
+                           "-c:v", &enc, "-f", "null", "-"])
+                    .stdout(Stdio::null()).stderr(Stdio::null())
+                    .status().await.map(|s| s.success()).unwrap_or(false);
+                if ok { return Some(enc); }
+            }
+            None
+        }));
+    }
+
+    let results = futures::future::join_all(all_futs).await;
+    for enc in results.into_iter().flatten() {
+        available.push(enc);
     }
 
     let recommended = if available.iter().any(|e| e == "hevc_nvenc") {
@@ -448,6 +495,7 @@ async fn detect_gpu() -> Json<serde_json::Value> {
         "recommended": recommended
     }))
 }
+
 
 // =========================================================================
 // Handlers — File Browsing
@@ -842,7 +890,7 @@ async fn cut_video(
     }
     drop(tasks);
 
-    let task_id = Uuid::new_v4().to_string()[..8].to_string();
+    let task_id = Uuid::new_v4().to_string()[..12].to_string();
     let out_ext = req.format.as_deref();
     let out_path = make_output_path(&src, "CLIP", out_ext);
     let output_rel = out_path
@@ -998,7 +1046,7 @@ async fn concat_segments(
     }
     drop(tasks);
 
-    let task_id = Uuid::new_v4().to_string()[..8].to_string();
+    let task_id = Uuid::new_v4().to_string()[..12].to_string();
     let out_ext = req.format.as_deref();
     let out_path = make_output_path(&src, "CONCAT", out_ext);
     let output_rel = out_path
@@ -1219,7 +1267,12 @@ async fn run_ffmpeg(
             }
             _ => {
                 task.status = "failed".to_string();
-                let detail = last_lines[last_lines.len().saturating_sub(5)..].join("\n");
+                let detail: String = last_lines[last_lines.len().saturating_sub(5)..]
+            .iter()
+            .map(|l| l.chars().take(200).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("
+");
                 task.error = Some(detail.clone());
                 task.message = if detail.is_empty() {
                     "FFmpeg failed".to_string()

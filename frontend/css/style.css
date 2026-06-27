@@ -573,7 +573,8 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    will-change: transform;
+    will-change: left;
+    transform: translateX(-50%);
 }
 
 .timeline-handle::after {

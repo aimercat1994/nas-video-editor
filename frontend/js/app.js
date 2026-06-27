@@ -203,8 +203,18 @@ function renderFileList(dirs, files, currentPath) {
 function makeFileItem(type, name, meta, onClick) {
     const div = document.createElement('div');
     div.className = 'file-item';
-    const iconSvg = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
-    div.innerHTML = `${iconSvg}<span class="name" title="${name}">${name}</span>${meta ? `<span class="meta">${meta}</span>` : ''}`;
+    div.innerHTML = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.title = name;
+    nameSpan.textContent = name;
+    div.appendChild(nameSpan);
+    if (meta) {
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'meta';
+        metaSpan.textContent = meta;
+        div.appendChild(metaSpan);
+    }
     div.addEventListener('click', onClick);
     return div;
 }
@@ -418,10 +428,8 @@ function updatePlayhead() {
     if (!state.duration) return;
     const pct = (video.currentTime / state.duration) * 100;
     dom['timeline-playhead'].style.width = pct + '%';
-    // Use transform for GPU-accelerated positioning
     const handle = dom['timeline-handle'];
-    handle.style.transform = `translateX(${pct}%)`;
-    handle.style.left = '0';
+    handle.style.left = pct + '%';
     handle.style.display = state.duration ? 'flex' : 'none';
 }
 
@@ -640,11 +648,19 @@ function removeSegment(i) {
 }
 
 function clearSegments() {
+    if (!state.segments.length && state.inPoint === null && state.outPoint === null) return;
+    pushHistory({
+        type: 'clearSegments',
+        segments: [...state.segments],
+        inPoint: state.inPoint,
+        outPoint: state.outPoint,
+    });
     state.segments = [];
     state.inPoint = null;
     state.outPoint = null;
     _lastSegmentHash = '';
     updateHandles(); renderSegmentOverlays(); updateSegmentsUI(); onTimeUpdate();
+    toast('\u5df2\u6e05\u9664\u6240\u6709\u7247\u6bb5', 'success');
 }
 
 function updateSegmentsUI() {
@@ -775,29 +791,68 @@ const TASK_ICON_CONCAT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="
 function renderTasks() {
     const list = dom['tasks-list'];
     if (!state.tasks.length) {
-        list.innerHTML = '<div style="padding:8px 10px;color:var(--muted-foreground);font-size:12px">暂无任务</div>';
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:8px 10px;color:var(--muted-foreground);font-size:12px';
+        empty.textContent = '\u6682\u65e0\u4efb\u52a1';
+        list.textContent = '';
+        list.appendChild(empty);
         return;
     }
     const frag = document.createDocumentFragment();
     for (const t of state.tasks) {
         const div = document.createElement('div');
         div.className = 'task-item';
-        const icon = t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT;
-        div.innerHTML = `
-            <div class="task-header">
-                <span class="task-type">${icon} ${t.type === 'cut' ? 'Cut' : 'Concat'} #${t.id}</span>
-                <span class="task-status ${t.status}">${statusLabel(t.status)}</span>
-            </div>
-            <div class="task-msg">${t.message || ''}</div>
-            ${t.status === 'running' || t.status === 'queued' ? `<div class="task-progress-bar"><div class="task-progress-fill" style="width:${t.progress * 100}%"></div></div>` : ''}
-            ${(t.status === 'running' || t.status === 'queued') ? `<div class="task-actions"><button class="btn btn-ghost btn-sm btn-destructive" data-task="${t.id}">取消</button></div>` : ''}
-            ${t.status === 'completed' && t.output ? `<div class="task-actions"><span class="task-output">📁 ${t.output}</span></div>` : ''}
-        `;
-        const cancelBtn = div.querySelector('[data-task]');
-        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-            await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
-            pollTasks();
-        });
+
+        const header = document.createElement('div');
+        header.className = 'task-header';
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'task-type';
+        typeSpan.innerHTML = (t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT);
+        typeSpan.appendChild(document.createTextNode(' ' + (t.type === 'cut' ? 'Cut' : 'Concat') + ' #' + t.id));
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'task-status ' + t.status;
+        statusSpan.textContent = statusLabel(t.status);
+        header.appendChild(typeSpan);
+        header.appendChild(statusSpan);
+        div.appendChild(header);
+
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'task-msg';
+        msgDiv.textContent = t.message || '';
+        div.appendChild(msgDiv);
+
+        if (t.status === 'running' || t.status === 'queued') {
+            const barOuter = document.createElement('div');
+            barOuter.className = 'task-progress-bar';
+            const barFill = document.createElement('div');
+            barFill.className = 'task-progress-fill';
+            barFill.style.width = (t.progress * 100) + '%';
+            barOuter.appendChild(barFill);
+            div.appendChild(barOuter);
+
+            const actions = document.createElement('div');
+            actions.className = 'task-actions';
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-ghost btn-sm btn-destructive';
+            btn.textContent = '\u53d6\u6d88';
+            btn.addEventListener('click', async () => {
+                await fetch('/api/tasks/' + t.id, { method: 'DELETE' });
+                pollTasks();
+            });
+            actions.appendChild(btn);
+            div.appendChild(actions);
+        }
+
+        if (t.status === 'completed' && t.output) {
+            const actions = document.createElement('div');
+            actions.className = 'task-actions';
+            const outSpan = document.createElement('span');
+            outSpan.className = 'task-output';
+            outSpan.textContent = '\ud83d\udcc1 ' + t.output;
+            actions.appendChild(outSpan);
+            div.appendChild(actions);
+        }
+
         frag.appendChild(div);
     }
     list.textContent = '';
