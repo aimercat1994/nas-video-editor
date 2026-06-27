@@ -31,6 +31,18 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Constant-time comparison to prevent timing attacks
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 // =========================================================================
 // Config
 // =========================================================================
@@ -81,6 +93,8 @@ struct Task {
     output: Option<String>,
     error: Option<String>,
     created_at: String,
+    #[serde(skip)]
+    pid: Option<u32>,
 }
 
 // =========================================================================
@@ -156,8 +170,11 @@ fn safe_path(videos_dir: &Path, rel: &str) -> Result<PathBuf, StatusCode> {
     if rel.contains('\0') || rel.len() > 1024 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let p = videos_dir.join(rel).canonicalize().unwrap_or_default();
-    let base = videos_dir.canonicalize().unwrap_or_default();
+    let joined = videos_dir.join(rel);
+    let p = joined.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    let base = videos_dir
+        .canonicalize()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if !p.starts_with(&base) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -324,7 +341,9 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Response {
-    if !state.password.is_empty() && req.password != state.password {
+    if !state.password.is_empty()
+        && !constant_time_eq(req.password.as_bytes(), state.password.as_bytes())
+    {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"detail": "Wrong password"})),
@@ -388,30 +407,34 @@ async fn detect_gpu() -> Json<serde_json::Value> {
         "hevc_vaapi",
     ];
 
-    for enc in &gpu_encoders {
-        let ok = Command::new("ffmpeg")
-            .args([
-                "-hide_banner",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=black:s=256x256:d=0.1",
-                "-c:v",
-                enc,
-                "-f",
-                "null",
-                "-",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if ok {
-            available.push(enc.to_string());
-        }
+    let fut_list: Vec<_> = gpu_encoders
+        .iter()
+        .map(|enc| async move {
+            let ok = Command::new("ffmpeg")
+                .args([
+                    "-hide_banner",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=256x256:d=0.1",
+                    "-c:v",
+                    enc,
+                    "-f",
+                    "null",
+                    "-",
+                ])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if ok { Some(enc.to_string()) } else { None }
+        })
+        .collect();
+    let results = futures::future::join_all(fut_list).await;
+    for enc in results.into_iter().flatten() {
+        available.push(enc);
     }
 
     let recommended = if available.len() > 3 {
@@ -550,14 +573,15 @@ async fn stream_video(
 
     // Check for Range header
     if let Some(range) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
-        let re = Regex::new(r"bytes=(\d+)-(\d*)").unwrap();
-        if let Some(caps) = re.captures(range) {
+        static RANGE_RE: std::sync::LazyLock<Regex> =
+            std::sync::LazyLock::new(|| Regex::new(r"bytes=(\d+)-(\d*)").unwrap());
+        if let Some(caps) = RANGE_RE.captures(range) {
             let start: u64 = caps[1].parse().unwrap_or(0);
-            let end: u64 = caps[2]
-                .parse()
-                .unwrap_or(0)
-                .max(start + 10 * 1024 * 1024)
-                .min(file_size - 1);
+            let end: u64 = if caps[2].is_empty() {
+                file_size - 1
+            } else {
+                caps[2].parse().unwrap_or(file_size - 1).min(file_size - 1)
+            };
             let length = end - start + 1;
 
             let file = match fs::File::open(&fp).await {
@@ -882,6 +906,7 @@ async fn cut_video(
         output: Some(output_rel),
         error: None,
         created_at: Utc::now().to_rfc3339(),
+        pid: None,
     };
 
     {
@@ -892,8 +917,9 @@ async fn cut_video(
     // Spawn FFmpeg
     let tasks_clone = state.tasks.clone();
     let tid = task_id.clone();
+    let videos_dir = state.videos_dir.clone();
     tokio::spawn(async move {
-        run_ffmpeg(tasks_clone, tid, cmd, total_duration).await;
+        run_ffmpeg(tasks_clone, tid, cmd, total_duration, videos_dir).await;
     });
 
     Json(serde_json::json!({
@@ -1065,6 +1091,7 @@ async fn concat_segments(
         output: Some(output_rel),
         error: None,
         created_at: Utc::now().to_rfc3339(),
+        pid: None,
     };
 
     {
@@ -1074,8 +1101,9 @@ async fn concat_segments(
 
     let tasks_clone = state.tasks.clone();
     let tid = task_id.clone();
+    let videos_dir = state.videos_dir.clone();
     tokio::spawn(async move {
-        run_ffmpeg(tasks_clone, tid, cmd, total_duration).await;
+        run_ffmpeg(tasks_clone, tid, cmd, total_duration, videos_dir).await;
     });
 
     Json(serde_json::json!({
@@ -1096,6 +1124,7 @@ async fn run_ffmpeg(
     task_id: String,
     cmd: Vec<String>,
     total_duration: f64,
+    videos_dir: PathBuf,
 ) {
     // Update status to running
     {
@@ -1123,9 +1152,18 @@ async fn run_ffmpeg(
         }
     };
 
+    // Store PID for process killing
+    if let Some(pid) = child.id() {
+        let mut tasks = tasks.write().await;
+        if let Some(task) = tasks.get_mut(&task_id) {
+            task.pid = Some(pid);
+        }
+    }
+
     let stderr = child.stderr.take().unwrap();
     let mut reader = BufReader::new(stderr);
-    let re = Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)").unwrap();
+    static PROGRESS_RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"time=(\d+):(\d+):(\d+\.\d+)").unwrap());
     let mut last_lines: Vec<String> = Vec::new();
 
     loop {
@@ -1140,7 +1178,7 @@ async fn run_ffmpeg(
                         last_lines.remove(0);
                     }
                 }
-                if let Some(caps) = re.captures(&line) {
+                if let Some(caps) = PROGRESS_RE.captures(&line) {
                     let h: f64 = caps[1].parse().unwrap_or(0.0);
                     let m: f64 = caps[2].parse().unwrap_or(0.0);
                     let s: f64 = caps[3].parse().unwrap_or(0.0);
@@ -1172,7 +1210,7 @@ async fn run_ffmpeg(
                 task.status = "completed".to_string();
                 task.progress = 1.0;
                 if let Some(ref out) = task.output {
-                    let size = fs::metadata(format!("/videos/{}", out))
+                    let size = fs::metadata(videos_dir.join(out))
                         .await
                         .map(|m| m.len())
                         .unwrap_or(0);
@@ -1233,6 +1271,10 @@ async fn cancel_task(
                     Json(serde_json::json!({"detail": "Cannot cancel task in this state"})),
                 )
                     .into_response();
+            }
+            // Kill the FFmpeg process if running
+            if let Some(pid) = task.pid {
+                unsafe { libc::kill(pid as i32, libc::SIGTERM); }
             }
             task.status = "cancelled".to_string();
             task.message = "Cancelled by user".to_string();

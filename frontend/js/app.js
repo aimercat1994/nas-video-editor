@@ -201,8 +201,20 @@ function renderFileList(dirs, files, currentPath) {
 function makeFileItem(type, name, meta, onClick) {
     const div = document.createElement('div');
     div.className = 'file-item';
-    const iconSvg = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
-    div.innerHTML = `${iconSvg}<span class="name" title="${name}">${name}</span>${meta ? `<span class="meta">${meta}</span>` : ''}`;
+    const iconSpan = document.createElement('span');
+    iconSpan.innerHTML = type === 'folder' ? ICON_FOLDER : ICON_VIDEO;
+    div.appendChild(iconSpan);
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.title = name;
+    nameSpan.textContent = name;
+    div.appendChild(nameSpan);
+    if (meta) {
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'meta';
+        metaSpan.textContent = meta;
+        div.appendChild(metaSpan);
+    }
     div.addEventListener('click', onClick);
     return div;
 }
@@ -388,10 +400,12 @@ function scheduleBufferedUpdate() {
     if (_bufferedRaf) return;
     _bufferedRaf = requestAnimationFrame(() => {
         _bufferedRaf = null;
-        if (video.buffered.length > 0) {
-            const end = video.buffered.end(video.buffered.length - 1);
-            dom['timeline-buffered'].style.width = (end / state.duration * 100) + '%';
-        }
+        try {
+            if (video.buffered.length > 0) {
+                const end = video.buffered.end(video.buffered.length - 1);
+                dom['timeline-buffered'].style.width = (end / state.duration * 100) + '%';
+            }
+        } catch (e) { /* buffered range changed */ }
     });
 }
 
@@ -743,22 +757,61 @@ function renderTasks() {
     for (const t of state.tasks) {
         const div = document.createElement('div');
         div.className = 'task-item';
-        const icon = t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT;
-        div.innerHTML = `
-            <div class="task-header">
-                <span class="task-type">${icon} ${t.type === 'cut' ? 'Cut' : 'Concat'} #${t.id}</span>
-                <span class="task-status ${t.status}">${statusLabel(t.status)}</span>
-            </div>
-            <div class="task-msg">${t.message || ''}</div>
-            ${t.status === 'running' || t.status === 'queued' ? `<div class="task-progress-bar"><div class="task-progress-fill" style="width:${t.progress * 100}%"></div></div>` : ''}
-            ${(t.status === 'running' || t.status === 'queued') ? `<div class="task-actions"><button class="btn btn-ghost btn-sm btn-destructive" data-task="${t.id}">取消</button></div>` : ''}
-            ${t.status === 'completed' && t.output ? `<div class="task-actions"><span class="task-output">📁 ${t.output}</span></div>` : ''}
-        `;
-        const cancelBtn = div.querySelector('[data-task]');
-        if (cancelBtn) cancelBtn.addEventListener('click', async () => {
-            await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
-            pollTasks();
-        });
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'task-header';
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'task-type';
+        typeSpan.innerHTML = (t.type === 'cut' ? TASK_ICON_CUT : TASK_ICON_CONCAT) + ' ';
+        const typeLabel = document.createTextNode((t.type === 'cut' ? 'Cut' : 'Concat') + ' #' + t.id);
+        typeSpan.appendChild(typeLabel);
+        header.appendChild(typeSpan);
+        const statusSpan = document.createElement('span');
+        statusSpan.className = 'task-status ' + t.status;
+        statusSpan.textContent = statusLabel(t.status);
+        header.appendChild(statusSpan);
+        div.appendChild(header);
+
+        // Message
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'task-msg';
+        msgDiv.textContent = t.message || '';
+        div.appendChild(msgDiv);
+
+        // Progress bar
+        if (t.status === 'running' || t.status === 'queued') {
+            const bar = document.createElement('div');
+            bar.className = 'task-progress-bar';
+            const fill = document.createElement('div');
+            fill.className = 'task-progress-fill';
+            fill.style.width = (t.progress * 100) + '%';
+            bar.appendChild(fill);
+            div.appendChild(bar);
+            const actions = document.createElement('div');
+            actions.className = 'task-actions';
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-ghost btn-sm btn-destructive';
+            btn.textContent = '取消';
+            btn.addEventListener('click', async () => {
+                await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
+                pollTasks();
+            });
+            actions.appendChild(btn);
+            div.appendChild(actions);
+        }
+
+        // Output
+        if (t.status === 'completed' && t.output) {
+            const actions = document.createElement('div');
+            actions.className = 'task-actions';
+            const outSpan = document.createElement('span');
+            outSpan.className = 'task-output';
+            outSpan.textContent = '📁 ' + t.output;
+            actions.appendChild(outSpan);
+            div.appendChild(actions);
+        }
+
         frag.appendChild(div);
     }
     list.textContent = '';
@@ -788,7 +841,7 @@ function onKeyDown(e) {
 // Utilities
 // =========================================================================
 function fmtTime(s) {
-    if (!s || isNaN(s)) return '00:00:00.000';
+    if (s == null || isNaN(s)) return '00:00:00.000';
     const h = Math.floor(s / 3600);
     const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
