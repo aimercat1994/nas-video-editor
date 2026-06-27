@@ -43,7 +43,7 @@ const video = $('video-player');
 // =========================================================================
 // Init
 // =========================================================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Pre-cache frequently accessed elements
     ['timeline', 'timeline-handle', 'timeline-playhead', 'timeline-buffered',
      'timeline-segments', 'handle-in', 'handle-out', 'time-current', 'time-duration',
@@ -58,9 +58,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     initTheme();
     bindEvents();
-    loadFiles('');
-    pollTasks();
-    detectGPU();
+
+    // Check auth first, then load files
+    try {
+        const authRes = await fetch('/api/auth/check');
+        if (authRes.ok) {
+            loadFiles('');
+            pollTasks();
+            detectGPU();
+        }
+        // If 401, the global interceptor will redirect to login
+    } catch (e) {
+        console.warn('Auth check failed:', e);
+    }
 });
 
 function bindEvents() {

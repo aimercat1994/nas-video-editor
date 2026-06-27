@@ -6,10 +6,11 @@ services:
     ports:
       - "8090:8080"
     volumes:
-      - /path/to/your/videos:/videos
+      - /vol1/1000/Alist:/videos/Alist
+      - /vol1/1000/Bililive:/videos/Bililive
       - video-editor-data:/data
     environment:
-      - PASSWORD=your-password
+      - PASSWORD=shuzhiyu13
       - TZ=Asia/Shanghai
     devices:
       - /dev/dri:/dev/dri
