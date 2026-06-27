@@ -276,7 +276,7 @@ async function loadVideo(path, name) {
     dom['player-wrapper'].style.display = 'flex';
     dom['header-title'].textContent = name;
 
-    const streamUrl = `/api/videos/${encodeURIComponent(path)}/stream`;
+    const streamUrl = `/api/stream/${encodeURIComponent(path)}`;
     const isTs = path.toLowerCase().endsWith('.ts');
 
     if (isTs && mpegts.isSupported()) {
@@ -306,7 +306,7 @@ async function loadVideo(path, name) {
     }
 
     try {
-        const res = await fetch(`/api/videos/${encodeURIComponent(path)}/info`);
+        const res = await fetch(`/api/info/${encodeURIComponent(path)}`);
         state.videoInfo = await res.json();
         const v = state.videoInfo;
         const parts = [];
