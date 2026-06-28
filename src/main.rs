@@ -1341,6 +1341,24 @@ async fn cancel_task(
     }
 }
 
+async fn clear_completed_tasks(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let mut tasks = state.tasks.write().await;
+    let to_remove: Vec<String> = tasks
+        .iter()
+        .filter(|(_, t)| {
+            t.status == "completed" || t.status == "failed" || t.status == "cancelled"
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    let count = to_remove.len();
+    for k in to_remove {
+        tasks.remove(&k);
+    }
+    Json(serde_json::json!({ "ok": true, "removed": count }))
+}
+
 async fn cleanup_tasks(tasks: &Arc<RwLock<HashMap<String, Task>>>) {
     let now = Utc::now().timestamp();
     let mut tasks = tasks.write().await;
@@ -1420,7 +1438,7 @@ async fn main() {
 
         .route("/cut", post(cut_video))
         .route("/concat", post(concat_segments))
-        .route("/tasks", get(list_tasks))
+        .route("/tasks", get(list_tasks).delete(clear_completed_tasks))
         .route("/tasks/{task_id}", get(get_task).delete(cancel_task));
 
     let app = Router::new()

@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
      'input-extra', 'btn-logout', 'btn-refresh', 'btn-theme', 'btn-play',
      'btn-prev-frame', 'btn-next-frame', 'btn-mark-in', 'btn-mark-out',
      'btn-add-segment', 'btn-clear-segments', 'btn-volume', 'volume-slider',
-     'step-size', 'btn-undo', 'icon-sun', 'icon-moon'].forEach($);
+     'step-size', 'btn-undo', 'icon-sun', 'icon-moon', 'btn-reset-tasks'].forEach($);
 
     initTheme();
     bindEvents();
@@ -120,6 +120,7 @@ function bindEvents() {
     document.addEventListener('keydown', onKeyDown);
 
     dom['btn-undo'].addEventListener('click', undo);
+    dom['btn-reset-tasks'].addEventListener('click', resetTasks);
 }
 
 // =========================================================================
@@ -825,6 +826,21 @@ async function pollTasks() {
 
 const TASK_ICON_CUT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>';
 const TASK_ICON_CONCAT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+async function resetTasks() {
+    try {
+        const res = await fetch('/api/tasks', { method: 'DELETE' });
+        const data = await res.json();
+        if (res.ok) {
+            toast(`已清除 ${data.removed} 个已完成任务`, 'success');
+            pollTasks();
+        } else {
+            toast(data.detail || '清除失败', 'error');
+        }
+    } catch (e) {
+        toast('请求失败: ' + e.message, 'error');
+    }
+}
 
 function renderTasks() {
     const list = dom['tasks-list'];
